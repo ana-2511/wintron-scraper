@@ -1,0 +1,16 @@
+{
+  "name": "wintron-new-products-scraper",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Weekly Wintron Electronics New products scraper that writes dated Excel files.",
+  "scripts": {
+    "scrape": "node scripts/scrape-new-products.js",
+    "scrape:headed": "node scripts/scrape-new-products.js --headed",
+    "scrape:sale": "node scripts/scrape-sale-products.js"
+  },
+  "dependencies": {
+    "nodemailer": "^10.0.0",
+    "playwright-core": "1.57.0",
+    "xlsx": "0.18.5"
+  }
+}

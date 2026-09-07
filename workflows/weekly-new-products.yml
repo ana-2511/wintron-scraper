@@ -1,0 +1,45 @@
+name: Wintron Weekly New Products Scraper
+
+on:
+  schedule:
+    # Runs every Monday at 05:30 UTC (11:00 AM IST)
+    - cron: '30 5 * * 1'
+  workflow_dispatch: # Allows manual trigger from GitHub Actions tab
+
+jobs:
+  scrape-new-products:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+
+      - name: Install Dependencies
+        run: npm ci || npm install
+
+      - name: Run Weekly New Products Scraper
+        env:
+          WINTRON_EMAIL: ${{ secrets.WINTRON_EMAIL }}
+          WINTRON_PASSWORD: ${{ secrets.WINTRON_PASSWORD }}
+          GMAIL_USER: ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          RECIPIENT_EMAIL: ${{ secrets.RECIPIENT_EMAIL || 'andrew.b@virventures.com' }}
+          OUTPUT_DIR: output
+          HEADLESS: 'true'
+          SCRAPE_TIMEZONE: 'Asia/Calcutta'
+        run: node scripts/scrape-new-products.js
+
+      - name: Upload Excel Artifact to GitHub
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wintron-new-products-${{ github.run_id }}
+          path: output/*.xlsx
+          retention-days: 30

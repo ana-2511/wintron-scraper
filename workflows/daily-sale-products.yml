@@ -1,0 +1,45 @@
+name: Wintron Daily Sale Products Scraper
+
+on:
+  schedule:
+    # Runs Monday through Friday at 05:30 UTC (11:00 AM IST)
+    - cron: '30 5 * * 1-5'
+  workflow_dispatch: # Allows manual trigger from GitHub Actions tab
+
+jobs:
+  scrape-sale-products:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+
+      - name: Install Dependencies
+        run: npm ci || npm install
+
+      - name: Run Daily Sale Products Scraper
+        env:
+          WINTRON_EMAIL: ${{ secrets.WINTRON_EMAIL }}
+          WINTRON_PASSWORD: ${{ secrets.WINTRON_PASSWORD }}
+          GMAIL_USER: ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          RECIPIENT_EMAIL: ${{ secrets.RECIPIENT_EMAIL || 'andrew.b@virventures.com' }}
+          OUTPUT_DIR: output
+          HEADLESS: 'true'
+          SCRAPE_TIMEZONE: 'Asia/Calcutta'
+        run: node scripts/scrape-sale-products.js
+
+      - name: Upload Excel Artifact to GitHub
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wintron-daily-sale-products-${{ github.run_id }}
+          path: output/*.xlsx
+          retention-days: 30
