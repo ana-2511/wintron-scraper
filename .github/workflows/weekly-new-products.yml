@@ -3,7 +3,7 @@ name: Wintron Weekly New Products Scraper
 on:
   schedule:
     # Runs every Monday at 05:30 UTC (11:00 AM IST)
-    - cron: '30 5 * * 1'
+    - cron: '15 5 * * 1'
   workflow_dispatch: # Allows manual trigger from GitHub Actions tab
 
 jobs:
