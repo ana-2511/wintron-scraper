@@ -3,7 +3,7 @@ name: Wintron Daily Sale Products Scraper
 on:
   schedule:
     # Runs Monday through Friday at 05:30 UTC (11:00 AM IST)
-    - cron: '30 5 * * 1-5'
+    - cron: '25 5 * * 1-5'
   workflow_dispatch: # Allows manual trigger from GitHub Actions tab
 
 jobs:
