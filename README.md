@@ -99,9 +99,9 @@ In your GitHub repository, go to **Settings** > **Secrets and variables** > **Ac
 | Secret Name | Value |
 | :--- | :--- |
 | `WINTRON_EMAIL` | `inventory@virventures.com` |
-| `WINTRON_PASSWORD` | `fgeq!@#$!DS!H3` |
+| `WINTRON_PASSWORD` | `confidential` |
 | `GMAIL_USER` | `anangsha.mini@gmail.com` |
-| `GMAIL_APP_PASSWORD` | `hpeouqewjugnkstd` |
+| `GMAIL_APP_PASSWORD` | `see google note` |
 | `RECIPIENT_EMAIL` | `andrew.b@virventures.com` |
 
 ### 3. Automatic Cloud Execution
