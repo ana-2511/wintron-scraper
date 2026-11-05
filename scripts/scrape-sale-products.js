@@ -8,7 +8,6 @@ const ROOT = path.resolve(__dirname, "..");
 const LOGIN_URL =
   "https://wintronelectronics.com/scs/checkout.ssp?is=login&login=T&fragment=login-register#login-register";
 const HOME_URL = "https://wintronelectronics.com/";
-const SALE_PRODUCTS_URL = "https://wintronelectronics.com/search?custitem_is_on_sale=true";
 
 loadEnv(path.join(ROOT, ".env"));
 
@@ -27,6 +26,12 @@ async function main() {
   fs.mkdirSync(path.join(ROOT, "logs"), { recursive: true });
 
   const now = new Date();
+  const dayOfWeek = new Intl.DateTimeFormat("en-US", { timeZone: config.timezone, weekday: "short" }).format(now);
+  if (["Sat", "Sun"].includes(dayOfWeek) && !process.argv.includes("--force")) {
+    console.log(`[GUARD] Today is ${dayOfWeek}. Daily Sale scraper only runs Monday through Friday. (Pass --force to override).`);
+    return;
+  }
+
   const scrapeDate = formatDate(now, config.timezone);
   const scrapedAtTimestamp = formatScrapedAt(now, config.timezone);
 
@@ -56,16 +61,21 @@ async function main() {
     // 1. Log in
     await login(page, log);
 
-    // 2. Go to home page and click "Sale"
-    await openSaleProductsFromHome(page, log);
+    // 2. Go to home page to establish full session state
+    await openHomePage(page, log);
 
-    // 3. Scrape all Sale products across pages
-    const { rows, expectedTotal } = await scrapeAllSaleProducts(
-      page,
-      scrapedAtTimestamp,
-      log
-    );
-    log(`Scraped total of ${rows.length} unique Sale products (expected ~${expectedTotal || 34}).`);
+    // 3. Scrape Sale products using fast Brand-Partitioned Items Stream
+    let rows = [];
+    let expectedTotal = 0;
+    try {
+      const result = await scrapeAllSaleProducts(page, scrapedAtTimestamp, log);
+      rows = result.rows;
+      expectedTotal = result.expectedTotal;
+    } catch (scrapeErr) {
+      log(`Scrape warning: ${scrapeErr.message}. Writing collected items...`);
+    }
+
+    log(`Scraped total of ${rows.length} unique Sale products (expected ~${expectedTotal || 5920}).`);
 
     // 4. Save to Excel
     const outputPath = writeWorkbook(rows, scrapeDate, config.outputDir);
@@ -124,166 +134,141 @@ async function login(page, log) {
   log("Login verified successfully");
 }
 
-async function openSaleProductsFromHome(page, log) {
-  log("2. Navigating to home page");
+async function openHomePage(page, log) {
+  log("2. Navigating to home page to establish session context");
   await page.goto(HOME_URL, { waitUntil: "domcontentloaded" });
   await page.waitForFunction(
     () => document.body && /Welcome\s+VIR VENTURES|Sign Out/i.test(document.body.innerText),
     undefined,
     { timeout: 60000 }
   );
-  await page.waitForTimeout(3000);
-
-  log("Waiting for 'Sale' link in navigation beside 'New'...");
-  await page.waitForFunction(() => {
-    const anchors = Array.from(document.querySelectorAll("a"));
-    return anchors.some(
-      (a) =>
-        (a.textContent || "").trim() === "Sale" &&
-        (a.href.includes("custitem_is_on_sale=true") ||
-          (a.getAttribute("data-hashtag") || "").includes("custitem_is_on_sale=true"))
-    );
-  }, undefined, { timeout: 30000 });
-
-  log("Clicking 'Sale' link");
-  await page.evaluate(() => {
-    const anchors = Array.from(document.querySelectorAll("a"));
-    const target = anchors.find(
-      (a) =>
-        (a.textContent || "").trim() === "Sale" &&
-        (a.href.includes("custitem_is_on_sale=true") ||
-          (a.getAttribute("data-hashtag") || "").includes("custitem_is_on_sale=true"))
-    );
-    if (target) target.click();
-    else window.location.href = "https://wintronelectronics.com/search?custitem_is_on_sale=true";
-  });
-
-  // Wait for the Sale products listing to render
-  log("Waiting for Sale products listing to render...");
-  await page.waitForFunction(
-    () => document.querySelectorAll(".facets-item-cell-grid").length > 0 && /Products/i.test(document.body.innerText),
-    undefined,
-    { timeout: 30000 }
-  );
   await page.waitForTimeout(2000);
-  log("Sale products listing loaded");
 }
 
 async function scrapeAllSaleProducts(page, timestamp, log) {
-  const bodyText = await page.locator("body").innerText().catch(() => "");
-  const match = bodyText.match(/(\d[\d,]*)\s+Products/i);
-  const expectedTotal = match ? Number(match[1].replace(/,/g, "")) : 34;
-  log(`Total expected Sale products: ${expectedTotal}`);
+  log("3. Fetching sale catalog facet metadata...");
+  const initData = await page.evaluate(async () => {
+    const res = await fetch(
+      "https://wintronelectronics.com/api/cacheable/items?c=7050881&country=US&currency=USD&custitem_is_on_sale=true&fieldset=search&include=facets&language=en&limit=1&n=2&offset=0&pricelevel=5&sort=relevance%3Adesc&use_pcv=T"
+    );
+    return await res.json();
+  });
 
-  const totalPages = Math.ceil(expectedTotal / 24);
-  log(`Total pages to scrape: ${totalPages}`);
+  const totalCatalogItems = initData.total || 0;
+  log(`Total Sale products in catalog: ${totalCatalogItems}`);
+
+  const brandFacet = (initData.facets || []).find((f) => f.id === "custitem_brand");
+  const brands = brandFacet && Array.isArray(brandFacet.values) ? brandFacet.values : [];
+  log(`Discovered ${brands.length} brand partitions.`);
 
   const collected = [];
+  const seen = new Set();
 
-  for (let pageNum = 1; pageNum <= totalPages; pageNum += 1) {
-    if (pageNum > 1) {
-      log(`Advancing to page ${pageNum}...`);
-      const clicked = await page.evaluate((targetPage) => {
-        const links = Array.from(document.querySelectorAll("ul.global-views-pagination-links a"));
-        const target = links.find((a) => a.textContent.trim() === String(targetPage));
-        if (target) {
-          target.click();
-          return true;
+  function addItem(item) {
+    const title = (item.displayname || item.storedisplayname2 || item.itemid || "").trim();
+    const mpn = (item.mpn || item.custitem_uc_mpn || item.custitem_mpn_search_ || item.itemid || "").trim();
+    if (!title && !mpn) return;
+
+    const key = `${title}|${mpn}`.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+
+    const listPriceNum = item.pricelevel8 != null ? item.pricelevel8 : item.custitem_uc_list_price;
+    const ourPriceNum =
+      item.pricelevel6 != null
+        ? item.pricelevel6
+        : item.pricelevel2 != null
+        ? item.pricelevel2
+        : item.pricelevel5 != null
+        ? item.pricelevel5
+        : item.onlinecustomerprice;
+
+    const listPrice =
+      listPriceNum != null ? `$${Number(listPriceNum).toFixed(2)}` : item.custitem_uc_list_price_formatted || "";
+    const ourPrice =
+      ourPriceNum != null
+        ? `$${Number(ourPriceNum).toFixed(2)}`
+        : item.onlinecustomerprice_formatted || item.pricelevel5_formatted || "";
+
+    collected.push({
+      Title: title,
+      MPN: mpn,
+      "List Price": listPrice,
+      "Our Price": ourPrice,
+      "Scraped At": timestamp,
+    });
+  }
+
+  // Partition across brands so no single request ever exceeds NetSuite's 5,000 item limit
+  if (brands.length > 0) {
+    for (let i = 0; i < brands.length; i++) {
+      const b = brands[i];
+      let offset = 0;
+      const limit = 100;
+      let brandTotal = null;
+
+      while (brandTotal === null || offset < brandTotal) {
+        const brandUrl = `https://wintronelectronics.com/api/cacheable/items?c=7050881&country=US&currency=USD&custitem_is_on_sale=true&custitem_brand=${encodeURIComponent(
+          b.url
+        )}&fieldset=search&language=en&limit=${limit}&n=2&offset=${offset}&pricelevel=5&use_pcv=T`;
+
+        let data = null;
+        for (let retry = 0; retry < 3; retry++) {
+          try {
+            data = await page.evaluate(async (url) => {
+              const res = await fetch(url);
+              return await res.json();
+            }, brandUrl);
+            break;
+          } catch (err) {
+            await page.waitForTimeout(1000);
+          }
         }
-        return false;
-      }, pageNum);
 
-      if (clicked) {
-        await page.waitForFunction(
-          (p) => {
-            const active = document.querySelector(".global-views-pagination-active");
-            return active && active.textContent.trim() === String(p);
-          },
-          pageNum,
-          { timeout: 15000 }
-        ).catch(() => {});
-      } else {
-        const targetUrl = `https://wintronelectronics.com/search?custitem_is_on_sale=true&page=${pageNum}`;
-        await page.goto(targetUrl, { waitUntil: "domcontentloaded" });
+        if (!data || !data.items || data.items.length === 0) break;
+        if (brandTotal === null) {
+          brandTotal = data.total || 0;
+        }
+
+        for (const item of data.items) {
+          addItem(item);
+        }
+
+        offset += limit;
       }
 
-      await page.waitForFunction(
-        () => document.querySelectorAll(".facets-item-cell-grid").length > 0,
-        undefined,
-        { timeout: 30000 }
-      );
-    }
-
-    // Brief settle time for price elements to hydrate
-    await page.waitForTimeout(1500);
-
-    const pageRows = await scrapeCurrentPage(page, timestamp);
-    log(`Page ${pageNum}: Scraped ${pageRows.length} Sale products`);
-    collected.push(...pageRows);
-  }
-
-  const rows = dedupeProducts(collected);
-  return { rows, expectedTotal };
-}
-
-async function scrapeCurrentPage(page, timestamp) {
-  return page.$$eval(
-    ".facets-item-cell-grid",
-    (cards, scrapedAt) => {
-      const text = (node) => (node && node.textContent ? node.textContent.replace(/\s+/g, " ").trim() : "");
-      const priceByLabel = (card, label) => {
-        const priceRows = [...card.querySelectorAll(".prices-module-price")];
-        const row = priceRows.find((item) => text(item).toLowerCase().includes(label.toLowerCase()));
-        if (row) {
-          const val = row.querySelector(".prices-module-price-value");
-          return val ? text(val) : text(row);
-        }
-        return "";
-      };
-
-      return cards
-        .map((card) => {
-          const titleEl = card.querySelector(".facets-item-cell-grid-title");
-          const title = text(titleEl);
-
-          let mpn = "";
-          const pElements = [...card.querySelectorAll("p")];
-          const mpnEl = pElements.find((p) => /^MPN:\s*/i.test(text(p)));
-          if (mpnEl) {
-            mpn = text(mpnEl).replace(/^MPN:\s*/i, "").trim();
-          } else {
-            mpn = card.getAttribute("data-sku") || "";
-          }
-
-          const listPrice = priceByLabel(card, "List Price");
-          const ourPrice = priceByLabel(card, "Our Price");
-
-          // Columns requested: Title | MPN | List Price | Our Price
-          return {
-            Title: title,
-            MPN: mpn,
-            "List Price": listPrice,
-            "Our Price": ourPrice,
-            "Scraped At": scrapedAt,
-          };
-        })
-        .filter((item) => item.Title || item.MPN);
-    },
-    timestamp
-  );
-}
-
-function dedupeProducts(rows) {
-  const seen = new Set();
-  const result = [];
-  for (const row of rows) {
-    const key = `${row.Title}|${row.MPN}`.toLowerCase().trim();
-    if (!seen.has(key)) {
-      seen.add(key);
-      result.push(row);
+      if ((i + 1) % 10 === 0 || i === brands.length - 1) {
+        log(`Brand progress: ${i + 1}/${brands.length} brands | Collected ${collected.length} unique products`);
+      }
     }
   }
-  return result;
+
+  // Fallback sweep: Check unpartitioned search to pick up any products without a brand
+  if (collected.length < totalCatalogItems) {
+    log(`Checking for any unbranded sale products (collected ${collected.length} / ${totalCatalogItems})...`);
+    let offset = 0;
+    const limit = 100;
+    while (offset < 5000) {
+      const unpartitionedUrl = `https://wintronelectronics.com/api/cacheable/items?c=7050881&country=US&currency=USD&custitem_is_on_sale=true&fieldset=search&language=en&limit=${limit}&n=2&offset=${offset}&pricelevel=5&use_pcv=T`;
+      let data = null;
+      try {
+        data = await page.evaluate(async (url) => {
+          const res = await fetch(url);
+          return await res.json();
+        }, unpartitionedUrl);
+      } catch (e) {
+        break;
+      }
+      if (!data || !data.items || data.items.length === 0) break;
+      for (const item of data.items) {
+        addItem(item);
+      }
+      offset += limit;
+      if (collected.length >= totalCatalogItems) break;
+    }
+  }
+
+  return { rows: collected, expectedTotal: totalCatalogItems };
 }
 
 function writeWorkbook(rows, scrapeDate, outputDir) {
@@ -293,7 +278,7 @@ function writeWorkbook(rows, scrapeDate, outputDir) {
 
   sheet["!cols"] = [
     { wch: 60 }, // Title
-    { wch: 22 }, // MPN
+    { wch: 25 }, // MPN
     { wch: 15 }, // List Price
     { wch: 15 }, // Our Price
     { wch: 22 }, // Scraped At
@@ -339,7 +324,6 @@ function resolveBrowserExecutable() {
     "/usr/bin/chromium",
     "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
     "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
-    "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
     "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
   ].filter(Boolean);
 
