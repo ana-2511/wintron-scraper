@@ -28,7 +28,7 @@ WINTRON_EMAIL=inventory@vir********.com
 WINTRON_PASSWORD=fgeq!@#$!DS!H3
 
 # Gmail Dispatch Configuration
-RECIPIENT_EMAIL=andrew.b@virventures.com
+RECIPIENT_EMAIL=andrew.b@vi*********.com
 GMAIL_USER=your_email@gmail.com
 GMAIL_APP_PASSWORD=your_16_character_app_password
 
@@ -98,11 +98,11 @@ In your GitHub repository, go to **Settings** > **Secrets and variables** > **Ac
 
 | Secret Name | Value |
 | :--- | :--- |
-| `WINTRON_EMAIL` | `inventory@virventures.com` |
+| `WINTRON_EMAIL` | `inventory@vir********.com` |
 | `WINTRON_PASSWORD` | `confidential` |
-| `GMAIL_USER` | `anangsha.mini@gmail.com` |
+| `GMAIL_USER` | `anangsha.m***@gmail.com` |
 | `GMAIL_APP_PASSWORD` | `see google note` |
-| `RECIPIENT_EMAIL` | `andrew.b@virventures.com` |
+| `RECIPIENT_EMAIL` | `andrew.b@vi*********.com` |
 
 ### 3. Automatic Cloud Execution
 - **Weekly New Products**: Runs every **Monday at 11:00 AM IST** (`30 5 * * 1` UTC).
