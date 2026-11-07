@@ -24,7 +24,7 @@ This automation tool logs into the Wintron Electronics portal, navigates to the 
 Store credentials in `.env` (kept private and git-ignored):
 
 ```ini
-WINTRON_EMAIL=inventory@virventures.com
+WINTRON_EMAIL=inventory@vir********.com
 WINTRON_PASSWORD=fgeq!@#$!DS!H3
 
 # Gmail Dispatch Configuration
